@@ -8,7 +8,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import nltk
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 
 # Descargar recursos necesarios de NLTK
 try:
@@ -134,6 +134,32 @@ class BM25:
             scores.append(score)
         
         return scores
+
+# ================= FUNCIONES DE EVALUACIÓN ===================
+
+def calculate_precision_recall(retrieved_docs, relevant_docs):
+    """
+    Calcula Precision y Recall para una consulta.
+    
+    Args:
+        retrieved_docs: Lista de doc_ids recuperados
+        relevant_docs: Lista de doc_ids relevantes
+    """
+    # Convertir a conjuntos para intersección
+    retrieved_set = set(retrieved_docs)
+    relevant_set = set(relevant_docs)
+    
+    # Calcular intersección (documentos relevantes y recuperados)
+    relevant_retrieved = retrieved_set.intersection(relevant_set)
+    
+    # Precision = |relevant ∩ retrieved| / |retrieved|
+    precision = len(relevant_retrieved) / len(retrieved_set) if retrieved_set else 0.0
+    
+    # Recall = |relevant ∩ retrieved| / |relevant|
+    recall = len(relevant_retrieved) / len(relevant_set) if relevant_set else 0.0
+    
+    return precision, recall
+
 def show_index_stats(inverted_index, sample_terms=5):
     print(f"\n📊 ESTADÍSTICAS DEL ÍNDICE INVERTIDO:")
     print(f"   Total de términos: {len(inverted_index)}")
@@ -161,14 +187,17 @@ def show_main_menu():
     print("2. 📊 Ver estadísticas del índice invertido")
     print("3. 🔍 Búsqueda con TF-IDF + Coseno")
     print("4. 🎯 Búsqueda con BM25")
-    print("5. ❌ Salir")
+    print("5. 📈 Evaluación de resultados")
+    print("6. ❌ Salir")
     print("="*60)
 
 # Función para mostrar estadísticas del dataset
-def show_dataset_stats(docs, vectorizer, tfidf_matrix):
+def show_dataset_stats(docs, queries, qrels_dict, vectorizer, tfidf_matrix):
     print(f"\n📊 ESTADÍSTICAS DEL DATASET:")
     print_separator()
     print(f"   Total de documentos: {len(docs)}")
+    print(f"   Total de queries: {len(queries)}")
+    print(f"   Queries con qrels: {len(qrels_dict)}")
     print(f"   Vocabulario TF-IDF: {len(vectorizer.vocabulary_)} términos")
     print(f"   Matriz TF-IDF: {tfidf_matrix.shape}")
     input("\n📥 Presiona Enter para continuar...")
@@ -270,14 +299,116 @@ def search_interface_bm25(bm25_model, docs, doc_ids):
 
         input("\n📥 Presiona Enter para continuar...")
 
+# Función de evaluación de resultados
+def evaluation_interface(vectorizer, tfidf_matrix, bm25_model, queries, qrels_dict, doc_id_to_index):
+    print("\n📈 EVALUACIÓN DE RESULTADOS")
+    print_separator()
+    print("Selecciona el método a evaluar:")
+    print("1. TF-IDF + Coseno")
+    print("2. BM25")
+    print("3. Volver al menú principal")
+    
+    option = input("\nSelecciona una opción (1-3): ").strip()
+    
+    if option == "3":
+        return
+    elif option not in ["1", "2"]:
+        print("❌ Opción no válida.")
+        return
+    
+    # Seleccionar queries para evaluar
+    print(f"\n📋 Total de queries disponibles: {len(queries)}")
+    print(f"📋 Queries con qrels: {len(qrels_dict)}")
+    
+    try:
+        num_queries = int(input("¿Cuántas queries evaluar? (máximo 50): "))
+        num_queries = min(num_queries, 50, len(queries))
+    except ValueError:
+        num_queries = 10
+        print(f"Usando valor por defecto: {num_queries} queries")
+    
+    print(f"\n🔄 Evaluando {num_queries} queries...")
+    
+    total_precision = 0
+    total_recall = 0
+    evaluated_queries = 0
+    
+    for i, query in enumerate(queries[:num_queries]):
+        query_id = query.query_id
+        query_text = query.text
+        
+        # Verificar si hay qrels para esta query
+        if query_id not in qrels_dict:
+            continue
+        
+        relevant_doc_ids = qrels_dict[query_id]
+        
+        # Convertir doc_ids a índices
+        relevant_indices = []
+        for doc_id in relevant_doc_ids:
+            if doc_id in doc_id_to_index:
+                relevant_indices.append(doc_id_to_index[doc_id])
+        
+        if not relevant_indices:
+            continue
+        
+        # Ejecutar búsqueda según el método seleccionado
+        processed_query = preprocess_text(query_text)
+        if not processed_query.strip():
+            continue
+        
+        if option == "1":  # TF-IDF
+            query_vector = vectorizer.transform([processed_query])
+            similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
+            results = [(i, sim) for i, sim in enumerate(similarities) if sim > 0]
+            results.sort(key=lambda x: x[1], reverse=True)
+        else:  # BM25
+            scores = bm25_model.get_scores(processed_query)
+            results = [(i, score) for i, score in enumerate(scores) if score > 0]
+            results.sort(key=lambda x: x[1], reverse=True)
+        
+        if not results:
+            continue
+        
+        # Extraer índices de documentos recuperados (top 10)
+        retrieved_indices = [doc_idx for doc_idx, score in results[:10]]
+        
+        # Calcular precision y recall
+        precision, recall = calculate_precision_recall(retrieved_indices, relevant_indices)
+        
+        total_precision += precision
+        total_recall += recall
+        evaluated_queries += 1
+        
+        # Mostrar progreso cada 10 queries
+        if evaluated_queries % 10 == 0:
+            print(f"   Procesadas {evaluated_queries} queries...")
+    
+    # Mostrar resultados
+    if evaluated_queries > 0:
+        avg_precision = total_precision / evaluated_queries
+        avg_recall = total_recall / evaluated_queries
+        
+        method_name = "TF-IDF + Coseno" if option == "1" else "BM25"
+        
+        print(f"\n📊 RESULTADOS DE EVALUACIÓN - {method_name}")
+        print_separator()
+        print(f"Queries evaluadas: {evaluated_queries}")
+        print(f"Precision promedio: {avg_precision:.4f}")
+        print(f"Recall promedio: {avg_recall:.4f}")
+    else:
+        print("\n❌ No se pudieron evaluar queries con los datos disponibles.")
+    
+    input("\n📥 Presiona Enter para continuar...")
+
 # Función principal del menú
-def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model):
+def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model, queries, qrels_dict, doc_id_to_index):
     while True:
         show_main_menu()
-        option = input("\nSelecciona una opción (1-5): ").strip()
+        option = input("\nSelecciona una opción (1-6): ").strip()
         
         if option == "1":
-            show_dataset_stats(docs, vectorizer, tfidf_matrix)
+            show_dataset_stats(docs, queries, qrels_dict, vectorizer, tfidf_matrix)
         elif option == "2":
             show_index_stats(inverted_index)
             input("\n📥 Presiona Enter para continuar...")
@@ -286,10 +417,12 @@ def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_mode
         elif option == "4":
             search_interface_bm25(bm25_model, docs, doc_ids)
         elif option == "5":
+            evaluation_interface(vectorizer, tfidf_matrix, bm25_model, queries, qrels_dict, doc_id_to_index)
+        elif option == "6":
             print("\n👋 ¡Hasta luego!")
             break
         else:
-            print("\n❌ Opción no válida. Por favor selecciona 1-5.")
+            print("\n❌ Opción no válida. Por favor selecciona 1-6.")
             input("📥 Presiona Enter para continuar...")
 
 # ================= EJECUCIÓN ===================
@@ -301,9 +434,10 @@ dataset = ir_datasets.load("beir/cqadupstack/programmers")
 # Extraer documentos del dataset
 docs = []
 doc_ids = []
+doc_id_to_index = {}
 
 print("🔄 Extrayendo documentos...")
-for doc in dataset.docs_iter():
+for idx, doc in enumerate(dataset.docs_iter()):
     combined_text = ""
     if hasattr(doc, 'title') and doc.title:
         combined_text += doc.title + " "
@@ -312,8 +446,23 @@ for doc in dataset.docs_iter():
     
     docs.append(combined_text.strip())
     doc_ids.append(doc.doc_id)
+    doc_id_to_index[doc.doc_id] = idx
 
 print(f"✅ Dataset cargado: {len(docs)} documentos.")
+
+# Extraer queries del dataset
+print("🔄 Extrayendo queries...")
+queries = list(dataset.queries_iter())
+print(f"✅ Queries cargadas: {len(queries)} queries.")
+
+# Extraer qrels (relevance judgments)
+print("🔄 Extrayendo qrels...")
+qrels_dict = defaultdict(list)
+for qrel in dataset.qrels_iter():
+    if qrel.relevance > 0:  # Solo documentos relevantes
+        qrels_dict[qrel.query_id].append(qrel.doc_id)
+
+print(f"✅ Qrels cargados: {len(qrels_dict)} queries con documentos relevantes.")
 
 # Aplicar preprocesamiento a los documentos
 print("🔄 Aplicando preprocesamiento a los documentos...")
@@ -336,4 +485,4 @@ print("✅ Modelo BM25 construido.")
 print("\n🎉 Sistema listo!")
 
 # Ejecutar el menú principal
-main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model)
+main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model, queries, qrels_dict, doc_id_to_index)
