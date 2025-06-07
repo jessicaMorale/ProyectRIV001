@@ -7,6 +7,8 @@ import re
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import nltk
+import math
+from collections import Counter
 
 # Descargar recursos necesarios de NLTK
 try:
@@ -83,7 +85,55 @@ def build_inverted_index(processed_docs):
     print(f"✅ Índice invertido construido con {len(inverted_index)} términos únicos")
     return inverted_index
 
-# Función para mostrar estadísticas del índice invertido
+# Clase BM25 para recuperación
+class BM25:
+    def __init__(self, documents, k1=1.5, b=0.75):
+        self.k1 = k1
+        self.b = b
+        self.documents = documents
+        self.doc_lengths = [len(doc.split()) for doc in documents]
+        self.avg_doc_length = sum(self.doc_lengths) / len(self.doc_lengths)
+        self.doc_count = len(documents)
+        
+        # Construir vocabulario y frecuencias de documentos
+        self.vocab = set()
+        self.doc_frequencies = {}
+        
+        for doc in documents:
+            words = set(doc.split())
+            self.vocab.update(words)
+            for word in words:
+                self.doc_frequencies[word] = self.doc_frequencies.get(word, 0) + 1
+    
+    def get_scores(self, query):
+        scores = []
+        query_words = query.split()
+        
+        for doc_idx, doc in enumerate(self.documents):
+            doc_words = doc.split()
+            doc_word_counts = Counter(doc_words)
+            score = 0
+            
+            for word in query_words:
+                if word in doc_word_counts:
+                    # Frecuencia del término en el documento
+                    tf = doc_word_counts[word]
+                    
+                    # Frecuencia inversa del documento
+                    df = self.doc_frequencies.get(word, 0)
+                    idf = math.log((self.doc_count - df + 0.5) / (df + 0.5))
+                    
+                    # Longitud del documento
+                    doc_len = self.doc_lengths[doc_idx]
+                    
+                    # Fórmula BM25
+                    numerator = tf * (self.k1 + 1)
+                    denominator = tf + self.k1 * (1 - self.b + self.b * (doc_len / self.avg_doc_length))
+                    score += idf * (numerator / denominator)
+            
+            scores.append(score)
+        
+        return scores
 def show_index_stats(inverted_index, sample_terms=5):
     print(f"\n📊 ESTADÍSTICAS DEL ÍNDICE INVERTIDO:")
     print(f"   Total de términos: {len(inverted_index)}")
@@ -109,8 +159,9 @@ def show_main_menu():
     print("="*60)
     print("1. 📋 Ver estadísticas del dataset")
     print("2. 📊 Ver estadísticas del índice invertido")
-    print("3. 🔍 Realizar búsqueda")
-    print("4. ❌ Salir")
+    print("3. 🔍 Búsqueda con TF-IDF + Coseno")
+    print("4. 🎯 Búsqueda con BM25")
+    print("5. ❌ Salir")
     print("="*60)
 
 # Función para mostrar estadísticas del dataset
@@ -122,10 +173,10 @@ def show_dataset_stats(docs, vectorizer, tfidf_matrix):
     print(f"   Matriz TF-IDF: {tfidf_matrix.shape}")
     input("\n📥 Presiona Enter para continuar...")
 
-# Interfaz de búsqueda
-def search_interface_no_preprocess(vectorizer, tfidf_matrix, docs, doc_ids):
+# Interfaz de búsqueda con TF-IDF
+def search_interface_tfidf(vectorizer, tfidf_matrix, docs, doc_ids):
     while True:
-        print("\n🔍 BÚSQUEDA DE DOCUMENTOS ")
+        print("\n🔍 BÚSQUEDA CON TF-IDF + COSENO")
         print_separator()
         print("Escribe tu consulta (o 'atras' para volver al menú principal)")
         query = input("\n> ").strip()
@@ -154,13 +205,61 @@ def search_interface_no_preprocess(vectorizer, tfidf_matrix, docs, doc_ids):
             print("❌ No se encontraron documentos relevantes.")
             continue
 
-        print(f"\n📋 RESULTADOS PARA: '{query}'")
+        print(f"\n📋 RESULTADOS TF-IDF PARA: '{query}'")
         print(f"Se encontraron {len(relevant_docs)} documentos relevantes")
         print_separator()
 
         for rank, (doc_id, sim) in enumerate(relevant_docs[:5], start=1):
             print(f"\n🔸 RESULTADO #{rank}")
-            print(f"   Similitud: {sim:.4f}")
+            print(f"   Similitud Coseno: {sim:.4f}")
+            print(f"   ID Documento: {doc_ids[doc_id]}")
+            print(f"   Contenido: {docs[doc_id][:200].replace('\n', ' ')}...")
+            if rank < 5 and rank < len(relevant_docs):
+                print("   " + "─" * 50)
+
+        if len(relevant_docs) > 5:
+            print(f"\n   📄 ... y {len(relevant_docs) - 5} documentos más")
+
+        input("\n📥 Presiona Enter para continuar...")
+
+# Interfaz de búsqueda con BM25
+def search_interface_bm25(bm25_model, docs, doc_ids):
+    while True:
+        print("\n🎯 BÚSQUEDA CON BM25")
+        print_separator()
+        print("Escribe tu consulta (o 'atras' para volver al menú principal)")
+        query = input("\n> ").strip()
+        
+
+        if query.lower() == 'atras':
+            break
+        if not query:
+            print("❌ Por favor ingresa una consulta válida.")
+            continue
+
+        print(f"\n🔄 Procesando consulta: '{query}'...")
+        
+        # Preprocesar la consulta igual que los documentos
+        processed_query = preprocess_text(query)
+        if not processed_query.strip():
+            print("❌ La consulta no contiene términos válidos después del preprocesamiento.")
+            continue
+            
+        scores = bm25_model.get_scores(processed_query)
+        relevant_docs = [(i, score) for i, score in enumerate(scores) if score > 0]
+        relevant_docs.sort(key=lambda x: x[1], reverse=True)
+
+        if not relevant_docs:
+            print("❌ No se encontraron documentos relevantes.")
+            continue
+
+        print(f"\n📋 RESULTADOS BM25 PARA: '{query}'")
+        print(f"Se encontraron {len(relevant_docs)} documentos relevantes")
+        print_separator()
+
+        for rank, (doc_id, score) in enumerate(relevant_docs[:5], start=1):
+            print(f"\n🔸 RESULTADO #{rank}")
+            print(f"   Puntuación BM25: {score:.4f}")
             print(f"   ID Documento: {doc_ids[doc_id]}")
             print(f"   Contenido: {docs[doc_id][:200].replace('\n', ' ')}...")
             if rank < 5 and rank < len(relevant_docs):
@@ -172,10 +271,10 @@ def search_interface_no_preprocess(vectorizer, tfidf_matrix, docs, doc_ids):
         input("\n📥 Presiona Enter para continuar...")
 
 # Función principal del menú
-def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index):
+def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model):
     while True:
         show_main_menu()
-        option = input("\nSelecciona una opción (1-4): ").strip()
+        option = input("\nSelecciona una opción (1-5): ").strip()
         
         if option == "1":
             show_dataset_stats(docs, vectorizer, tfidf_matrix)
@@ -183,12 +282,14 @@ def main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index):
             show_index_stats(inverted_index)
             input("\n📥 Presiona Enter para continuar...")
         elif option == "3":
-            search_interface_no_preprocess(vectorizer, tfidf_matrix, docs, doc_ids)
+            search_interface_tfidf(vectorizer, tfidf_matrix, docs, doc_ids)
         elif option == "4":
+            search_interface_bm25(bm25_model, docs, doc_ids)
+        elif option == "5":
             print("\n👋 ¡Hasta luego!")
             break
         else:
-            print("\n❌ Opción no válida. Por favor selecciona 1-4.")
+            print("\n❌ Opción no válida. Por favor selecciona 1-5.")
             input("📥 Presiona Enter para continuar...")
 
 # ================= EJECUCIÓN ===================
@@ -227,7 +328,12 @@ vectorizer = TfidfVectorizer()
 tfidf_matrix = vectorizer.fit_transform(processed_docs)
 print("✅ Vectorización completada.")
 
+# Construir modelo BM25
+print("🔄 Construyendo modelo BM25...")
+bm25_model = BM25(processed_docs)
+print("✅ Modelo BM25 construido.")
+
 print("\n🎉 Sistema listo!")
 
 # Ejecutar el menú principal
-main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index)
+main_menu(docs, doc_ids, vectorizer, tfidf_matrix, inverted_index, bm25_model)
