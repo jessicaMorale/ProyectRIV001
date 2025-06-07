@@ -2,12 +2,58 @@
 import ir_datasets
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import string
+import re
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import nltk
+
+# Descargar recursos necesarios de NLTK
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
+
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
 
 # Función que imprime una línea separadora
 def print_separator():
     print("=" * 60)
 
-# Interfaz de búsqueda que no aplica preprocesamiento
+# Función de preprocesamiento de texto
+def preprocess_text(text):
+    """
+    Procesamiento básico del texto:
+    - Tokenización
+    - Normalización (minúsculas, remoción de puntuación)
+    - Remoción de stopwords
+    """
+    if not text:
+        return ""
+    
+    # NORMALIZACIÓN
+    text = text.lower()
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # TOKENIZACIÓN
+    tokens = word_tokenize(text)
+    
+    # REMOCIÓN DE STOPWORDS
+    stop_words = set(stopwords.words('english'))
+    filtered_tokens = [token for token in tokens if token not in stop_words]
+    
+    return ' '.join(filtered_tokens)
+
+# Interfaz de búsqueda
 def search_interface_no_preprocess(vectorizer, tfidf_matrix, docs, doc_ids):
     while True:
         print("\n🔍 BÚSQUEDA DE DOCUMENTOS ")
@@ -61,7 +107,6 @@ doc_ids = []
 
 print("🔄 Extrayendo documentos...")
 for doc in dataset.docs_iter():
-    # Combinar título y texto del documento
     combined_text = ""
     if hasattr(doc, 'title') and doc.title:
         combined_text += doc.title + " "
@@ -73,13 +118,17 @@ for doc in dataset.docs_iter():
 
 print(f"✅ Dataset cargado: {len(docs)} documentos.")
 
-# Vectorización sin preprocesamiento personalizado
+# Aplicar preprocesamiento a los documentos
+print("🔄 Aplicando preprocesamiento a los documentos...")
+processed_docs = [preprocess_text(doc) for doc in docs]
+
+# Vectorización con preprocesamiento
 print("🔄 Vectorizando documentos...")
 vectorizer = TfidfVectorizer()
-tfidf_matrix = vectorizer.fit_transform(docs)
+tfidf_matrix = vectorizer.fit_transform(processed_docs)
 print("✅ Vectorización completada.")
 
-# Mostrar algunas estadísticas del dataset
+# Mostrar estadísticas del dataset
 print(f"\n📊 ESTADÍSTICAS DEL DATASET:")
 print(f"   Total de documentos: {len(docs)}")
 print(f"   Vocabulario TF-IDF: {len(vectorizer.vocabulary_)} términos")
