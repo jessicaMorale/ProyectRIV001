@@ -7,8 +7,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
-
-# Descargar recursos necesarios de NLTK
+# Descargar recursos NLTK
 for resource in ['punkt', 'punkt_tab', 'stopwords']:
     try:
         nltk.data.find(f'tokenizers/{resource}' if 'punkt' in resource else f'corpora/{resource}')
@@ -19,11 +18,6 @@ def preprocess_text(text):
     """Procesamiento básico del texto: tokenización, normalización, remoción de stopwords"""
     if not text:
         return ""
-
-# Función que imprime una línea separadora
-def print_separator():
-    print("=" * 60)
-
     
     # Normalización y tokenización
     text = re.sub(r'[^a-z\s]', ' ', text.lower())
@@ -74,8 +68,6 @@ class TFIDFSearch:
         
         return doc_scores
 
-# Clase BM25 para recuperación
-
 class BM25:
     def _init_(self, inverted_index, doc_lengths, k1=1.5, b=0.75):
         self.k1, self.b = k1, b
@@ -110,6 +102,71 @@ def calculate_precision_recall(retrieved_docs, relevant_docs):
     
     return precision, recall
 
+def calculate_average_precision(retrieved_docs, relevant_docs):
+    """Calcula Average Precision para una query"""
+    if not relevant_docs:
+        return 0.0
+    
+    relevant_set = set(relevant_docs)
+    precision_sum = 0.0
+    relevant_found = 0
+    
+    for i, doc_id in enumerate(retrieved_docs, 1):
+        if doc_id in relevant_set:
+            relevant_found += 1
+            precision_at_i = relevant_found / i
+            precision_sum += precision_at_i
+    
+    return precision_sum / len(relevant_docs) if relevant_docs else 0.0
+
+def calculate_map_score(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to_index, method="tfidf", k=10):
+    """Calcula MAP (Mean Average Precision) para todo el sistema"""
+    print(f"🔄 Calculando MAP para {method.upper()}...")
+    
+    total_ap = 0.0
+    evaluated_queries = 0
+    
+    for query in queries:
+        if query.query_id not in qrels_dict:
+            continue
+        
+        relevant_indices = [doc_id_to_index[doc_id] for doc_id in qrels_dict[query.query_id] 
+                          if doc_id in doc_id_to_index]
+        
+        if not relevant_indices:
+            continue
+        
+        processed_query = preprocess_text(query.text)
+        if not processed_query.strip():
+            continue
+        
+        # Obtener resultados según el método
+        if method == "tfidf":
+            doc_scores = tfidf_search.get_tfidf_scores(processed_query)
+            if not doc_scores:
+                continue
+            results = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+            retrieved_indices = [doc_idx for doc_idx, score in results[:k]]
+        else:  # BM25
+            scores = bm25_model.get_scores(processed_query)
+            results = [(i, score) for i, score in enumerate(scores) if score > 0]
+            results.sort(key=lambda x: x[1], reverse=True)
+            retrieved_indices = [doc_idx for doc_idx, score in results[:k]]
+        
+        if not retrieved_indices:
+            continue
+        
+        # Calcular Average Precision para esta query
+        ap = calculate_average_precision(retrieved_indices, relevant_indices)
+        total_ap += ap
+        evaluated_queries += 1
+        
+        if evaluated_queries % 50 == 0:
+            print(f"   Procesadas {evaluated_queries} queries...")
+    
+    map_score = total_ap / evaluated_queries if evaluated_queries > 0 else 0.0
+    return map_score, evaluated_queries
+
 def show_results(query, results, docs, doc_ids, method_name):
     """Muestra resultados de búsqueda"""
     print(f"\n📋 RESULTADOS {method_name} PARA: '{query}'")
@@ -120,7 +177,9 @@ def show_results(query, results, docs, doc_ids, method_name):
         print(f"\n🔸 RESULTADO #{rank}")
         print(f"   Puntuación {method_name}: {score:.4f}")
         print(f"   ID Documento: {doc_ids[doc_id]}")
-        print(f"   Contenido: {docs[doc_id][:200].replace('\n', ' ')}...")
+        content = docs[doc_id][:200].replace('\n', ' ')
+        print(f"   Contenido: {content}...")
+
         if rank < 5 and rank < len(results):
             print("   " + "─" * 50)
     
@@ -166,12 +225,36 @@ def evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_t
     print("\n📈 EVALUACIÓN DE RESULTADOS")
     print("=" * 60)
     
-    method_option = input("Selecciona método (1-TF-IDF, 2-BM25, 3-Volver): ").strip()
-    if method_option == "3" or method_option not in ["1", "2"]:
+    method_option = input("Selecciona método (1-TF-IDF, 2-BM25, 3-MAP Completo, 4-Volver): ").strip()
+    if method_option == "4" or method_option not in ["1", "2", "3"]:
+        return
+    
+    if method_option == "3":
+        # Calcular MAP para ambos métodos
+        print("\n🎯 CALCULANDO MAP PARA TODO EL SISTEMA")
+        print("=" * 60)
+        
+        # MAP para TF-IDF
+        map_tfidf, queries_tfidf = calculate_map_score(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to_index, "tfidf")
+        
+        # MAP para BM25
+        map_bm25, queries_bm25 = calculate_map_score(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to_index, "bm25")
+        
+        print(f"\n📊 RESULTADOS MAP DEL SISTEMA COMPLETO")
+        print("=" * 60)
+        print(f"TF-IDF:")
+        print(f"   MAP Score: {map_tfidf:.4f}")
+        print(f"   Queries evaluadas: {queries_tfidf}")
+        print(f"\nBM25:")
+        print(f"   MAP Score: {map_bm25:.4f}")
+        print(f"   Queries evaluadas: {queries_bm25}")
+        print(f"\n🏆 Mejor método: {'TF-IDF' if map_tfidf > map_bm25 else 'BM25'}")
+        
+        input("\n📥 Presiona Enter para continuar...")
         return
     
     try:
-        num_queries = min(int(input("¿Cuántas queries evaluar? (máximo 50): ")), 50, len(queries))
+        num_queries = min(int(input("¿Cuántas queries evaluar? (máximo 150): ")), 150, len(queries))
     except ValueError:
         num_queries = 10
     
@@ -314,5 +397,5 @@ def main():
             print("\n❌ Opción no válida. Por favor selecciona 1-5.")
             input("📥 Presiona Enter para continuar...")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
