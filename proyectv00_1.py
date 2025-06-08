@@ -50,7 +50,7 @@ def build_inverted_index(processed_docs):
     return inverted_index
 
 class TFIDFSearch:
-    def _init_(self, inverted_index, doc_count):
+    def __init__(self, inverted_index, doc_count):  # Corregido: __init__ en lugar de _init_
         self.inverted_index = inverted_index
         self.doc_count = doc_count
         self.idf_scores = {term: math.log(doc_count / len(doc_freqs)) 
@@ -69,7 +69,7 @@ class TFIDFSearch:
         return doc_scores
 
 class BM25:
-    def _init_(self, inverted_index, doc_lengths, k1=1.5, b=0.75):
+    def __init__(self, inverted_index, doc_lengths, k1=1.5, b=0.75):  # Corregido: __init__ en lugar de _init_
         self.k1, self.b = k1, b
         self.inverted_index = inverted_index
         self.doc_lengths = doc_lengths
@@ -253,11 +253,7 @@ def evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_t
         input("\n📥 Presiona Enter para continuar...")
         return
     
-    try:
-        num_queries = min(int(input("¿Cuántas queries evaluar? (máximo 150): ")), 150, len(queries))
-    except ValueError:
-        num_queries = 10
-    
+    num_queries = len(queries)
     print(f"\n🔄 Evaluando {num_queries} queries...")
     
     total_precision = total_recall = evaluated_queries = 0
@@ -314,23 +310,14 @@ def evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_t
     input("\n📥 Presiona Enter para continuar...")
 
 def show_dataset_stats(docs, queries, qrels_dict, inverted_index):
-    """Muestra estadísticas del dataset"""
-    print(f"\n📊 ESTADÍSTICAS DEL DATASET:")
+    """Muestra informacion del dataset"""
+    print(f"\n📊 INFORMACION DEL DATASET:")
     print("=" * 60)
     print(f"   Total de documentos: {len(docs)}")
     print(f"   Total de queries: {len(queries)}")
     print(f"   Queries con qrels: {len(qrels_dict)}")
     print(f"   Términos únicos: {len(inverted_index)}")
     print(f"   Total de postings: {sum(len(docs) for docs in inverted_index.values())}")
-    
-    # Top términos
-    term_doc_counts = sorted([(term, len(docs)) for term, docs in inverted_index.items()], 
-                           key=lambda x: x[1], reverse=True)
-    
-    print(f"\n   Términos más frecuentes:")
-    for term, doc_count in term_doc_counts[:5]:
-        total_freq = sum(inverted_index[term].values())
-        print(f"     '{term}': {doc_count} documentos, {total_freq} ocurrencias")
     
     input("\n📥 Presiona Enter para continuar...")
 
@@ -373,9 +360,9 @@ def main():
     # Menú principal
     while True:
         print("\n" + "="*60)
-        print("🔍 SISTEMA DE BÚSQUEDA DE DOCUMENTOS")
+        print("🔍 SISTEMA DE RECUPERACION DE INFORMACION")
         print("="*60)
-        options = ["📋 Ver estadísticas", "🔍 Búsqueda TF-IDF", "🎯 Búsqueda BM25", "📈 Evaluación", "❌ Salir"]
+        options = ["📋 Ver Informacion", "🔍 Búsqueda TF-IDF", "🎯 Búsqueda BM25", "📈 Evaluación", "❌ Salir"]
         for i, option in enumerate(options, 1):
             print(f"{i}. {option}")
         print("="*60)
