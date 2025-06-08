@@ -8,9 +8,9 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
 # Descargar recursos NLTK
-for resource in ['punkt', 'punkt_tab', 'stopwords']:
+for resource in ['punkt', 'stopwords']:
     try:
-        nltk.data.find(f'tokenizers/{resource}' if 'punkt' in resource else f'corpora/{resource}')
+        nltk.data.find(f'tokenizers/punkt' if 'punkt' in resource else f'corpora/{resource}')
     except LookupError:
         nltk.download(resource)
 
@@ -50,47 +50,51 @@ def build_inverted_index(processed_docs):
     return inverted_index
 
 class TFIDFSearch:
-    def _init_(self, inverted_index, doc_count):
+    def __init__(self, inverted_index, doc_count):
         self.inverted_index = inverted_index
         self.doc_count = doc_count
-        self.idf_scores = {term: math.log(doc_count / len(doc_freqs)) 
-                          for term, doc_freqs in inverted_index.items()}
-    
+        self.idf_scores = {
+            term: math.log(doc_count / len(doc_freqs))
+            for term, doc_freqs in inverted_index.items()
+        }
+
     def get_tfidf_scores(self, query):
         """Calcula puntuaciones TF-IDF para una query"""
         doc_scores = defaultdict(float)
-        
+
         for term in query.split():
             if term in self.inverted_index:
                 idf = self.idf_scores[term]
                 for doc_id, tf in self.inverted_index[term].items():
                     doc_scores[doc_id] += tf * idf
-        
-        return doc_scores
+
+        return dict(doc_scores)
 
 class BM25:
-    def _init_(self, inverted_index, doc_lengths, k1=1.5, b=0.75):
-        self.k1, self.b = k1, b
+    def __init__(self, inverted_index, doc_lengths, k1=1.5, b=0.75):
         self.inverted_index = inverted_index
         self.doc_lengths = doc_lengths
-        self.avg_doc_length = sum(doc_lengths) / len(doc_lengths)
+        self.k1 = k1
+        self.b = b
+        self.avg_doc_len = sum(doc_lengths.values()) / len(doc_lengths)
         self.doc_count = len(doc_lengths)
-    
+
     def get_scores(self, query):
         """Calcula puntuaciones BM25 para una query"""
-        doc_scores = defaultdict(float)
-        
+        scores = defaultdict(float)
         for term in query.split():
-            if term in self.inverted_index:
-                df = len(self.inverted_index[term])
-                idf = math.log((self.doc_count - df + 0.5) / (df + 0.5))
-                
-                for doc_id, tf in self.inverted_index[term].items():
-                    doc_len = self.doc_lengths[doc_id]
-                    score = idf * (tf * (self.k1 + 1)) / (tf + self.k1 * (1 - self.b + self.b * (doc_len / self.avg_doc_length)))
-                    doc_scores[doc_id] += score
-        
-        return [doc_scores.get(i, 0.0) for i in range(self.doc_count)]
+            if term not in self.inverted_index:
+                continue
+            doc_dict = self.inverted_index[term]
+            df = len(doc_dict)
+            idf = math.log((self.doc_count - df + 0.5) / (df + 0.5) + 1)
+
+            for doc_id, tf in doc_dict.items():
+                doc_len = self.doc_lengths[doc_id]
+                norm_tf = (tf * (self.k1 + 1)) / (tf + self.k1 * (1 - self.b + self.b * doc_len / self.avg_doc_len))
+                scores[doc_id] += idf * norm_tf
+
+        return scores
 
 def calculate_precision_recall(retrieved_docs, relevant_docs):
     """Calcula Precision y Recall"""
@@ -149,8 +153,7 @@ def calculate_map_score(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to
             retrieved_indices = [doc_idx for doc_idx, score in results[:k]]
         else:  # BM25
             scores = bm25_model.get_scores(processed_query)
-            results = [(i, score) for i, score in enumerate(scores) if score > 0]
-            results.sort(key=lambda x: x[1], reverse=True)
+            results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
             retrieved_indices = [doc_idx for doc_idx, score in results[:k]]
         
         if not retrieved_indices:
@@ -210,8 +213,7 @@ def search_interface(search_model, docs, doc_ids, method_name):
             results = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True) if doc_scores else []
         else:  # BM25
             scores = search_model.get_scores(processed_query)
-            results = [(i, score) for i, score in enumerate(scores) if score > 0]
-            results.sort(key=lambda x: x[1], reverse=True)
+            results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         
         if not results:
             print("❌ No se encontraron documentos relevantes.")
@@ -285,8 +287,7 @@ def evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_t
             retrieved_indices = [doc_idx for doc_idx, score in results[:10]]
         else:  # BM25
             scores = bm25_model.get_scores(processed_query)
-            results = [(i, score) for i, score in enumerate(scores) if score > 0]
-            results.sort(key=lambda x: x[1], reverse=True)
+            results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
             retrieved_indices = [doc_idx for doc_idx, score in results[:10]]
         
         if not retrieved_indices:
@@ -336,66 +337,72 @@ def show_dataset_stats(docs, queries, qrels_dict, inverted_index):
 
 def main():
     """Función principal"""
-    # Carga del dataset
-    print("🔄 Cargando dataset BEIR CQADupStack programmers...")
-    dataset = ir_datasets.load("beir/cqadupstack/programmers")
-    
-    # Extraer datos
-    docs, doc_ids, doc_id_to_index = [], [], {}
-    
-    for idx, doc in enumerate(dataset.docs_iter()):
-        text = (doc.title + " " if hasattr(doc, 'title') and doc.title else "") + \
-               (doc.text if hasattr(doc, 'text') and doc.text else "")
-        docs.append(text.strip())
-        doc_ids.append(doc.doc_id)
-        doc_id_to_index[doc.doc_id] = idx
-    
-    queries = list(dataset.queries_iter())
-    
-    qrels_dict = defaultdict(list)
-    for qrel in dataset.qrels_iter():
-        if qrel.relevance > 0:
-            qrels_dict[qrel.query_id].append(qrel.doc_id)
-    
-    print(f"✅ Dataset cargado: {len(docs)} documentos, {len(queries)} queries, {len(qrels_dict)} qrels.")
-    
-    # Preprocesamiento y construcción de modelos
-    print("🔄 Procesando documentos...")
-    processed_docs = [preprocess_text(doc) for doc in docs]
-    inverted_index = build_inverted_index(processed_docs)
-    
-    doc_lengths = [len(doc.split()) for doc in processed_docs]
-    tfidf_search = TFIDFSearch(inverted_index, len(docs))
-    bm25_model = BM25(inverted_index, doc_lengths)
-    
-    print("🎉 Sistema listo!")
-    
-    # Menú principal
-    while True:
-        print("\n" + "="*60)
-        print("🔍 SISTEMA DE BÚSQUEDA DE DOCUMENTOS")
-        print("="*60)
-        options = ["📋 Ver estadísticas", "🔍 Búsqueda TF-IDF", "🎯 Búsqueda BM25", "📈 Evaluación", "❌ Salir"]
-        for i, option in enumerate(options, 1):
-            print(f"{i}. {option}")
-        print("="*60)
+    try:
+        # Carga del dataset
+        print("🔄 Cargando dataset BEIR CQADupStack programmers...")
+        dataset = ir_datasets.load("beir/cqadupstack/programmers")
         
-        option = input("\nSelecciona una opción (1-5): ").strip()
+        # Extraer datos
+        docs, doc_ids, doc_id_to_index = [], [], {}
         
-        if option == "1":
-            show_dataset_stats(docs, queries, qrels_dict, inverted_index)
-        elif option == "2":
-            search_interface(tfidf_search, docs, doc_ids, "TF-IDF")
-        elif option == "3":
-            search_interface(bm25_model, docs, doc_ids, "BM25")
-        elif option == "4":
-            evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to_index)
-        elif option == "5":
-            print("\n👋 ¡Hasta luego!")
-            break
-        else:
-            print("\n❌ Opción no válida. Por favor selecciona 1-5.")
-            input("📥 Presiona Enter para continuar...")
+        for idx, doc in enumerate(dataset.docs_iter()):
+            text = (doc.title + " " if hasattr(doc, 'title') and doc.title else "") + \
+                   (doc.text if hasattr(doc, 'text') and doc.text else "")
+            docs.append(text.strip())
+            doc_ids.append(doc.doc_id)
+            doc_id_to_index[doc.doc_id] = idx
+        
+        queries = list(dataset.queries_iter())
+        
+        qrels_dict = defaultdict(list)
+        for qrel in dataset.qrels_iter():
+            if qrel.relevance > 0:
+                qrels_dict[qrel.query_id].append(qrel.doc_id)
+        
+        print(f"✅ Dataset cargado: {len(docs)} documentos, {len(queries)} queries, {len(qrels_dict)} qrels.")
+        
+        # Preprocesamiento y construcción de modelos
+        print("🔄 Procesando documentos...")
+        processed_docs = [preprocess_text(doc) for doc in docs]
+        inverted_index = build_inverted_index(processed_docs)
+        
+        doc_lengths = {i: len(doc.split()) for i, doc in enumerate(processed_docs)}
+        tfidf_search = TFIDFSearch(inverted_index, len(docs))
+        bm25_model = BM25(inverted_index, doc_lengths)
+        
+        print("🎉 Sistema listo!")
+        
+        # Menú principal
+        while True:
+            print("\n" + "="*60)
+            print("🔍 SISTEMA DE BÚSQUEDA DE DOCUMENTOS")
+            print("="*60)
+            options = ["📋 Ver estadísticas", "🔍 Búsqueda TF-IDF", "🎯 Búsqueda BM25", "📈 Evaluación", "❌ Salir"]
+            for i, option in enumerate(options, 1):
+                print(f"{i}. {option}")
+            print("="*60)
+            
+            option = input("\nSelecciona una opción (1-5): ").strip()
+            
+            if option == "1":
+                show_dataset_stats(docs, queries, qrels_dict, inverted_index)
+            elif option == "2":
+                search_interface(tfidf_search, docs, doc_ids, "TF-IDF")
+            elif option == "3":
+                search_interface(bm25_model, docs, doc_ids, "BM25")
+            elif option == "4":
+                evaluation_interface(tfidf_search, bm25_model, queries, qrels_dict, doc_id_to_index)
+            elif option == "5":
+                print("\n👋 ¡Hasta luego!")
+                break
+            else:
+                print("\n❌ Opción no válida. Por favor selecciona 1-5.")
+                input("📥 Presiona Enter para continuar...")
+    
+    except Exception as e:
+        print(f"\n❌ Error al cargar el dataset: {e}")
+        print("Asegúrate de tener instalado ir_datasets y conexión a internet")
+        print("Puedes instalarlo con: pip install ir_datasets")
 
 if __name__ == "__main__":
     main()
