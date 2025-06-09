@@ -8,6 +8,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from rank_bm25 import BM25Okapi
+from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import wordnet
 from tabulate import tabulate
 
 # Descargar recursos NLTK
@@ -17,19 +20,54 @@ for resource in ['punkt', 'punkt_tab', 'stopwords']:
     except LookupError:
         nltk.download(resource)
 
-def preprocess_text(text):
-    """Procesamiento básico del texto: tokenización, normalización, remoción de stopwords"""
+def get_wordnet_pos(word):
+    """Mapea POS tags a WordNet POS tags para lemmatización"""
+    tag = nltk.pos_tag([word])[0][1][0].upper()
+    tag_dict = {"J": wordnet.ADJ, "N": wordnet.NOUN, "V": wordnet.VERB, "R": wordnet.ADV}
+    return tag_dict.get(tag, wordnet.NOUN)
+
+def preprocess_text(text, use_stemming=False):
+    """Función de preprocesamiento mejorada"""
     if not text:
         return ""
     
-    # Normalización y tokenización
-    text = re.sub(r'[^a-z\s]', ' ', text.lower())
+    # Preservar términos técnicos de programación
+    programming_replacements = {
+        r'\bC\+\+\b': 'cplusplus',
+        r'\bC#\b': 'csharp', 
+        r'\b\.NET\b': 'dotnet',
+        r'\bNode\.js\b': 'nodejs',
+        r'\bHTML5\b': 'html5',
+        r'\bCSS3\b': 'css3'
+    }
+    
+    for pattern, replacement in programming_replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    
+    text = text.lower()
+    text = re.sub(r'[^\w\s\+\-\#]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
+    
     tokens = word_tokenize(text)
     
-    # Remoción de stopwords
-    stop_words = set(stopwords.words('english'))
-    return ' '.join([token for token in tokens if token not in stop_words])
+    # Stopwords expandidas para programación
+    programming_stopwords = {
+        'code', 'example', 'question', 'answer', 'problem', 'need', 'want', 
+        'know', 'help', 'please', 'thanks'
+    }
+    
+    stop_words = set(stopwords.words('english')).union(programming_stopwords)
+    tokens = [token for token in tokens if token not in stop_words and len(token) > 1]
+    
+    # Usar lemmatización en lugar de stemming
+    if use_stemming:
+        stemmer = PorterStemmer()
+        tokens = [stemmer.stem(token) for token in tokens]
+    else:
+        lemmatizer = WordNetLemmatizer()
+        tokens = [lemmatizer.lemmatize(token, get_wordnet_pos(token)) for token in tokens]
+    
+    return ' '.join(tokens)
 
 def build_inverted_index(processed_docs):
     """Construye un índice invertido"""
